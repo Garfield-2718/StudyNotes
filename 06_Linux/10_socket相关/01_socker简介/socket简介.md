@@ -29,11 +29,9 @@
 
 `Linux` 通过 `VFS` 把“打开的对象”都抽象为文件描述符，`socket` 也以 `fd` 的形式暴露，因而能用 `read/write`、`poll/epoll` 等通用接口，每个 `socket` 在内核里同时有 `struct socket` 和一个与之绑定的 `struct file`；其 `inode` 类型是 `S_IFSOCK`，对应内核的伪文件系统 `sockfs`
 
-不同类型的 `socket` 并不会各自拥有不同的 `struct file` 操作表。用户态拿到的 `socket fd`，其 `struct file` 基本都由“网络子系统的 `socket` 层”统一处理：`VFS + sockfs + net/socket.c` 中的 `socket_file_ops`。
+不同类型的 `socket` 并不会各自拥有不同的 `struct file` 操作表。用户态拿到的 `socket fd`，其 `struct file` 基本都由“网络子系统的 `socket` 层”统一处理：`VFS + sockfs + net/socket.c` 中的 `socket_file_ops`
 
-各地址族/协议的差异体现在 `struct socket->ops`（`struct proto_ops`）和更底层的 `struct proto` 上；`socket_file_ops` 只是把 `read/write/poll/ioctl/mmap` 等调用分发到相应的 `proto_ops`。
-
-
+各地址族/协议的差异体现在 `struct socket->ops`（`struct proto_ops`）和更底层的 `struct proto` 上；`socket_file_ops` 只是把 `read/write/poll/ioctl/mmap` 等调用分发到相应的 `proto_ops`
 
 ### socket_file_ops和proto_ops
 
