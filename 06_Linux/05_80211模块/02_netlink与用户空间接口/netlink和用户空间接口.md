@@ -148,7 +148,7 @@ static struct genl_family nl80211_fam __ro_after_init = {
 | `version`  | 一般填 `1`                                                   |
 | `reserved` | 填 `0`                                                       |
 
-命令枚举在 `linux/nl80211.h` 的 `enum nl80211_commands`。
+命令枚举在 `linux/nl80211.h` 的 `enum nl80211_commands`
 
 #### 3. nlattr（属性 TLV）
 
@@ -159,16 +159,33 @@ static struct genl_family nl80211_fam __ro_after_init = {
      2B       2B        nla_len - 4       对齐到 4
 ```
 
-- `nla_len`：含属性头，不含尾部对齐填充
+- **nla_len字段：**
 
-- `nla_type`：低 `14` 位是属性 `ID`（`NL80211_ATTR_*`）；可带 `NLA_F_NESTED`（嵌套）等标志
+    `NLA_HDRLEN + payload 字节数`。不含尾部对齐填充。头本身已经是 `4` 字节，`NLA_HDRLEN == 4`
 
-    
+- **nla_type字段：**
 
-- `payload` 类型决定每种载荷形态：`u32`、`u8`、`MAC`、嵌套属性等
+    低 `14` 位是属性号，例如 `NL80211_ATTR_IFINDEX=3`。`bit15 NLA_F_NESTED` 表示 `payload` 里又是一串 `nlattr`。`bit14 NLA_F_NET_BYTEORDER` 表示整数按网络字节序存放。这两个标志互斥
+
+    **常见类型：**
+
+    | 数值 | 宏                        | 含义                      |
+    | :--- | :------------------------ | :------------------------ |
+    | `0`  | `NL80211_ATTR_UNSPEC`     | 未指定（一般不用）        |
+    | `1`  | `NL80211_ATTR_WIPHY`      | `wiphy` 索引              |
+    | `2`  | `NL80211_ATTR_WIPHY_NAME` | `wiphy` 名称              |
+    | `3`  | `NL80211_ATTR_IFINDEX`    | 网卡 `ifindex`            |
+    | `4`  | `NL80211_ATTR_IFNAME`     | 接口名                    |
+    | `5`  | `NL80211_ATTR_IFTYPE`     | 接口类型                  |
+    | `6`  | `NL80211_ATTR_MAC`        | `MAC` 地址                |
+    | …    | …                         | 一直到 `NL80211_ATTR_MAX` |
+
+- **payload字段：**
+
+     类型决定每种载荷形态：`u32`、`u8`、`MAC`、嵌套属性等，按该属性的 `policy` 类型放裸数据，没有额外类型标记
 
     **常见属性：**
-
+    
     | 属性                            | 典型内容             |
     | :------------------------------ | :------------------- |
     | `NL80211_ATTR_IFINDEX`          | `u32` 网卡 `ifindex` |
@@ -177,6 +194,73 @@ static struct genl_family nl80211_fam __ro_after_init = {
     | `NL80211_ATTR_SSID`             | `SSID` 字节串        |
     | `NL80211_ATTR_SCAN_FREQUENCIES` | 嵌套：一串频率 `u32` |
     | `NL80211_ATTR_SCAN_SSIDS`       | 嵌套：一串 `SSID`    |
+
+* **pad字段：**
+
+    填 `0`，使下一个属性从 `4` 字节边界开始。解析时用 `NLA_ALIGN(nla_len)` 跳过
+
+## 内核解析nlattr
+
+对于`socket netlink`协议族公共框架部分的处理流程本文不做展开，直接切入与`nl80211`相关的部分
+
+### netlink调用部分
+
+```c
+genl_rcv
+    // 找到对应的family id
+	->genl_family_find_byid
+    // 根据对应的family id去调用对应的协议栈接口
+    ->genl_family_rcv_msg
+    	->genl_family_rcv_msg_doit
+    		// 解析协议中的nlattr字段
+    		->genl_family_rcv_msg_attrs_parse
+    		// 执行真正的注册doit接口
+    		->ops->pre_doit(ops, skb, &info);
+```
+
+### nl80211注册接口
+
+在`nl80211`模块初始化时会向内核注册,包含了`family`注册和执行函数回调接口
+
+```c
+// linux-7.3\net\wireless\nl80211.c
+static const struct genl_small_ops nl80211_small_ops[] = {
+	{
+		.cmd = NL80211_CMD_SET_WIPHY,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.doit = nl80211_set_wiphy,
+		.flags = GENL_UNS_ADMIN_PERM,
+	},
+	// ......
+}
+
+static struct genl_family nl80211_fam __ro_after_init = {
+	.name = NL80211_GENL_NAME,	/* have users key off the name instead */
+	.hdrsize = 0,			/* no private header */
+	.version = 1,			/* no particular meaning now */
+	.maxattr = NL80211_ATTR_MAX,
+	.policy = nl80211_policy,
+	.netnsok = true,
+	.pre_doit = nl80211_pre_doit,
+	.post_doit = nl80211_post_doit,
+	.module = THIS_MODULE,
+	.ops = nl80211_ops,
+	.n_ops = ARRAY_SIZE(nl80211_ops),
+	.small_ops = nl80211_small_ops,
+	.n_small_ops = ARRAY_SIZE(nl80211_small_ops),
+	.resv_start_op = NL80211_CMD_REMOVE_LINK_STA + 1,
+	.mcgrps = nl80211_mcgrps,
+	.n_mcgrps = ARRAY_SIZE(nl80211_mcgrps),
+	.parallel_ops = true,
+};
+
+int __init nl80211_init(void)
+{
+	// ......
+	err = genl_register_family(&nl80211_fam);
+	// ......
+}
+```
 
 ## 原始socket发起wifi扫描代码实例
 
